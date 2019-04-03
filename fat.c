@@ -25,7 +25,7 @@
 #include <stdlib.h>
 
 char cwd[256];
-char FAT[4880];
+int FAT[2440];
 
 struct Node {
   int value;
@@ -47,7 +47,7 @@ static void* fat_init(struct fuse_conn_info *conn) {
     // read from offset 512 and read 4880 bytes in fat
     fseek(disk, 512, SEEK_SET);
     // init fat from file
-    fgets(FAT, 4880, disk);
+    fgets(FAT, 2440, disk);
     fclose(disk);
   }
   
@@ -58,19 +58,19 @@ static void* fat_init(struct fuse_conn_info *conn) {
     fputc(0, disk);
     fclose(disk);
     // init fat if no disk
-    memset(FAT, 0, 4880);
+    memset(FAT, 0, 2440);
   }
   // create free list
-  for(int i=0; i < 4880; i = i+2){
-    if(FAT[i] == 0 && FAT[i+1] == 0){
+  for(int i=0; i < 2440; i++){
+    if(FAT[i] == 0){
       if (freeListHead == NULL){
 	freeListHead = (struct Node*)malloc(sizeof(struct Node));
-	freeListHead -> value = i/2;
+	freeListHead -> value = i;
 	freeListHead -> next = freeListTail;
 
       } else { // freelist head is not null + free list tail is null
 	freeListTail = (struct Node*)malloc(sizeof(struct Node));
-	freeListTail -> value = i/2;
+	freeListTail -> value = i;
 	freeListTail -> next = NULL;
 	freeListTail = freeListTail -> next;
 
@@ -81,6 +81,8 @@ static void* fat_init(struct fuse_conn_info *conn) {
 	return NULL;
 }
 
+
+static int fat_mkdir(){}
 static int fat_getattr(const char *path, struct stat *stbuf){
   
 
