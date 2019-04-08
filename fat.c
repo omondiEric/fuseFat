@@ -106,9 +106,12 @@ static void* fat_init(struct fuse_conn_info *conn) {
     root_data[1].file_name[0]= "..";
     root_data[1].type = DIR_T;
     root_data[1].first_cluster = 0;
-     
+
+    pwrite(fileno(disk), &root_data, 4096, 10272);
+    
     fclose(disk);
   }
+  
   // create free list
   for(int i=1; i < 2440; i++){
     if(FAT[i] == 0){
@@ -127,19 +130,31 @@ static void* fat_init(struct fuse_conn_info *conn) {
       
     }
   }
-  
-  
-	return NULL;
+  return NULL;
 }
 
 
 static int fat_mkdir(const char* path, mode_t mode){
 }
 
-static int fat_getattr(const char *path, struct stat *stbuf){  
+static int fat_getattr(const char *path, struct stat *stbuf){
+
+  memset(stbuf, 0, sizeof(struct stat));
+
+  if(strcmp(path, "/")==0){
+    struct dir_ent s[128];
+    FILE * d = fopen(cwd, "r+");
+    pread(fileno(d), &s, 4096, 10272);
+    stbuf->st_mode = S_IFDIR | 0755;
+    stbuf->st_size = s[0].first_cluster;
+    fclose(d);
+  }
+  return 0;
+
 }
 
 static int fat_access(const char* path, int mask ){
+  return 0;
 }
 
 static int fat_readdir(const char* path, void* buf, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info* fi){
