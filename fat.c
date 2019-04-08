@@ -118,16 +118,14 @@ static void* fat_init(struct fuse_conn_info *conn) {
       if (freeListHead == NULL){
 	freeListHead = (struct Node*)malloc(sizeof(struct Node));
 	freeListHead -> value = i;
-	freeListHead -> next = freeListTail;
-
-      } else { // freelist head is not null + free list tail is null
-	freeListTail = (struct Node*)malloc(sizeof(struct Node));
-	freeListTail -> value = i;
-	freeListTail -> next = NULL;
+	freeListTail = freeListHead;
+      } else { 
+	struct Node * newTail = (struct Node*)malloc(sizeof(struct Node));
+	newTail -> value = i;
+	//	printf("tail val: %d\n", freeListTail->value);
+	freeListTail -> next = newTail;
 	freeListTail = freeListTail -> next;
-
-      } 
-      
+      }
     }
   }
   return NULL;
@@ -135,20 +133,51 @@ static void* fat_init(struct fuse_conn_info *conn) {
 
 
 static int fat_mkdir(const char* path, mode_t mode){
+  struct dir_ent block[128];
+  int i = 2;
+  while(block[i] != NULL && block[i].type!=EMPTY_T){
+      i++;
+  }
+
+  //  const char *token = strtok("/new", "/");
+  int new_block = freeListHead->value;
+  freeListHead = freeListHead->next;
+
+  //  memset(block[i].file_name, 0, 24);
+  //  strcpy(block[i].file_name,token);
+  block[i].type = DIR_T;
+  block[i].first_cluster = new_block;
+  
+  FILE *disk1 = fopen(cwd, "r+");
+  pwrite(fileno(disk1), &block, 4096, 10272);
+  fclose(disk1);
+
+  struct dir_ent b[128];
+  FILE *disk2 = fopen(cwd, "r+");
+  pread(fileno(disk2), &b, 4096, 10272);
+  fclose(disk2);
+  printf("head: %d\n\n", b[i].first_cluster);
+  if(freeListHead!=NULL){
+    printf("next: %d\n\n", freeListHead->value);
+  }
+  return 0;
 }
 
 static int fat_getattr(const char *path, struct stat *stbuf){
-
+  //  printf("attr: %d\n\n", freeListHead->value);
   memset(stbuf, 0, sizeof(struct stat));
 
+  struct dir_ent s[128];
+  FILE * d = fopen(cwd, "r+");
+  pread(fileno(d), &s, 4096, 10272);
+  fclose(d);
+
   if(strcmp(path, "/")==0){
-    struct dir_ent s[128];
-    FILE * d = fopen(cwd, "r+");
-    pread(fileno(d), &s, 4096, 10272);
     stbuf->st_mode = S_IFDIR | 0755;
     stbuf->st_size = s[0].first_cluster;
-    fclose(d);
+    return 0;
   }
+
   return 0;
 
 }
@@ -163,7 +192,8 @@ static int fat_readdir(const char* path, void* buf, fuse_fill_dir_t filler, off_
 static struct fuse_operations fat_operations = {
 	.init		= fat_init,
 	.getattr	= fat_getattr,
-	
+	.mkdir		= fat_mkdir,
+	.access		= fat_access,
 /*
 	.fgetattr	= NULL,
 	.access		= NULL,
@@ -171,7 +201,6 @@ static struct fuse_operations fat_operations = {
 	.readdir	= NULL,
 	.mknod		= NULL,
 	.create		= NULL,
-	.mkdir		= NULL,
 	.symlink	= NULL,
 	.unlink		= NULL,
 	.rmdir		= NULL,
