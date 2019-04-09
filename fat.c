@@ -63,6 +63,10 @@ static int compute_address(int block_num){
   return 512 + (2440*4) + (4096*block_num);
 }
 
+static int compute_block(int address){
+  return (address - 512 - (2440*4))/4096;
+}
+
 static void* fat_init(struct fuse_conn_info *conn) {
 
   //  printf("\n\ndir size: %lu\n\n", sizeof(struct dir_ent));
@@ -104,13 +108,11 @@ static void* fat_init(struct fuse_conn_info *conn) {
       root_data[i].type = EMPTY_T;
     }
 
-    memset(&root_data[0].file_name, 0, 20);
     strcpy(&root_data[0].file_name, ".");
     root_data[0].type = DIR_T;
     root_data[0].first_cluster = 0;
     root_data[0].size = 4096;
-
-    memset(&root_data[1].file_name, 0, 20);
+    
     strcpy(&root_data[1].file_name, "..");
     root_data[1].type = DIR_T;
     root_data[1].first_cluster = 0;
@@ -142,28 +144,71 @@ static void* fat_init(struct fuse_conn_info *conn) {
 
 static int fat_mkdir(const char* path, mode_t mode){
   
-  struct dir_ent block[128];
-  FILE *d = fopen(cwd, "r+");
-  pread(fileno(d), &block, 4096, 10272);
-  fclose(d);
-  int i = 2;
+  struct dir_ent dir_data[128];
+  int block_address = superblock.s.root_address;
+  char * path_piece = strtok(path, "/");
+  bool exists = false;
+  FILE *disk;
+  char * new_dir_name;
+  if(strcmp(path, "/")==0){ exists = true;}
 
-  int new_block = freeListHead->value;
-  freeListHead = freeListHead->next;
+  while(path_piece !=NULL){
+    new_dir_name = path_piece;
+    exists = false;
+	
+    // read in directory data
+    disk = fopen(cwd, "r+");
+    pread(fileno(disk), &dir_data, 4096, block_address);
+    fclose(disk);
 
-  memset(block[i].file_name, 0, 20);
-  strcpy(block[i].file_name, "new");
-  block[i].type = DIR_T;
-  block[i].size = 4096;
-  block[i].first_cluster = new_block;
+    // iterate through all dir_ent looking for one w/ file_name of path_piece
+    for(int i=0; i<128; i++){
+      if(dir_data[i].type != EMPTY_T && strcmp(path_piece, dir_data[i].file_name)==0){
+	exists = true;
+	block_address = compute_address(dir_data[i].first_cluster);
+	break;
+      }
+    }
+    path_piece = strtok(NULL, "/");
+    if(!exists && path_piece!=NULL){return -ENOENT;}
+  }
+  disk = fopen(cwd, "r+");
+  pread(fileno(disk), &dir_data, 4096, block_address);
+  fclose(disk);
 
-  // need to initialize the directory data ("." and "..")
+  for (int i=0; i<128; i++){
+    if(dir_data[i].type==EMPTY_T){
+      int new_block = freeListHead-> value;
+      freeListHead = freeListHead->next;
+      strcpy(dir_data[i].file_name, new_dir_name);
+      dir_data[i].type = DIR_T;
+      dir_data[i].size = 4096;
+      dir_data[i].first_cluster = new_block;
 
-  FILE *disk1 = fopen(cwd, "r+");
-  pwrite(fileno(disk1), &block, 4096, 10272);
-  fclose(disk1);
+      disk = fopen(cwd, "r+");
+      pwrite(fileno(disk), &dir_data, 4096, block_address);
 
-  return 0;
+      struct dir_ent new_dir_data[128];
+      for(int i=2; i<128; i++){
+	new_dir_data[i].type = EMPTY_T;
+      }
+
+      strcpy(&new_dir_data[0].file_name, ".");
+      new_dir_data[0].type = DIR_T;
+      new_dir_data[0].first_cluster = new_block;
+      new_dir_data[0].size = 4096;
+
+      strcpy(&new_dir_data[1].file_name, "..");
+      new_dir_data[1].type = DIR_T;
+      new_dir_data[1].first_cluster = compute_block(block_address);
+      new_dir_data[1].size = 4096;
+
+      pwrite(fileno(disk), &new_dir_data, 4096, compute_address(new_block));
+      fclose(disk);
+
+      return 0;
+    }
+  }
 }
 
 static int fat_getattr(const char *path, struct stat *stbuf){
@@ -261,6 +306,7 @@ static int fat_readdir(const char* path, void* buf, fuse_fill_dir_t filler, off_
 
   while(path_piece != NULL){
     exists = false;
+
     // read in directory data
     disk = fopen(cwd, "r+");
     pread(fileno(disk), &dir_data, 4096, block_address);
