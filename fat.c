@@ -137,29 +137,24 @@ static void* fat_init(struct fuse_conn_info *conn) {
 
 static int fat_mkdir(const char* path, mode_t mode){
   struct dir_ent block[128];
+  FILE *d = fopen(cwd, "r+");
+  pwrite(fileno(d), &block, 4096, 10272);
+  fclose(d);
   int i = 2;
 
-  //  const char *token = strtok("/new", "/");
   int new_block = freeListHead->value;
   freeListHead = freeListHead->next;
 
-  //  memset(block[i].file_name, 0, 24);
-  //  strcpy(block[i].file_name,token);
+  memset(block[i].file_name, 0, 20);
+  strcpy(block[i].file_name, "new");
   block[i].type = DIR_T;
+  block[i].size = 4096;
   block[i].first_cluster = new_block;
-  
+
   FILE *disk1 = fopen(cwd, "r+");
   pwrite(fileno(disk1), &block, 4096, 10272);
   fclose(disk1);
 
-  struct dir_ent b[128];
-  FILE *disk2 = fopen(cwd, "r+");
-  pread(fileno(disk2), &b, 4096, 10272);
-  fclose(disk2);
-  printf("head: %d\n\n", b[i].first_cluster);
-  if(freeListHead!=NULL){
-    printf("next: %d\n\n", freeListHead->value);
-  }
   return 0;
 }
 
