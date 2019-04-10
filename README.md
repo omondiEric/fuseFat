@@ -6,5 +6,5 @@ _update this README.md to reflect the repository's contents_
 
 ## Implementation details
 
-_please fill this section with any relevant details that will help with running/using/reading your code._ \n
+_please fill this section with any relevant details that will help with running/using/reading your code._  
 Steve, Julia and Julia are the sole contributors to this repository. 
