@@ -67,6 +67,44 @@ static int compute_block(int address){
   return (address - 512 - (2440*4))/4096;
 }
 
+static int pwrite_check(int fd, void *buf, size_t count, off_t offset){
+  if(pwrite(fd, buf, count, offset) != count){
+    return -EIO;
+  }
+  return 0;
+}
+
+static int pread_check(int fd, void *buf, size_t count, off_t offset){
+  if(pread(fd, buf, count, offset) != count){
+    return -EIO;
+  }
+  return 0;
+}
+
+
+static int mkdir_helper(int current_block, int parent_block){
+    struct dir_ent root_data[128];
+    for(int i=2; i < 128 ; i++){
+      root_data[i].type = EMPTY_T;
+    }
+
+    strcpy((char*) &root_data[0].file_name, (const char*) ".");
+    root_data[0].type = DIR_T;
+    root_data[0].first_cluster = current_block;
+    root_data[0].size = 4096;
+    
+    strcpy((char*) &root_data[1].file_name, (const char*) "..");
+    root_data[1].type = DIR_T;
+    root_data[1].first_cluster = parent_block;
+    root_data[1].size = 4096;
+
+    FILE *disk = fopen(cwd, "r+");
+    pwrite_check(fileno(disk), &root_data, 4096, compute_address(current_block));
+    // read one block, or macro that calls pread or pwrite if fails returns appropriate error 
+    fclose(disk);
+    return 0;
+}
+
 static void* fat_init(struct fuse_conn_info *conn) {
 
   //  printf("\n\ndir size: %lu\n\n", sizeof(struct dir_ent));
@@ -77,12 +115,10 @@ static void* fat_init(struct fuse_conn_info *conn) {
   // file exists  
   if (access(cwd, F_OK) != -1){
     disk = fopen(cwd, "r+");
-    pread(fileno(disk), &FAT, 2440, 512);
+    pread_check(fileno(disk), &FAT, 2440, 512);
     // read from offset 512 and read 4880 bytes in fat
     // read superblock
-    if (pread(fileno(disk), &superblock, 512, 0) == -1) {
-      return -1;
-    }
+    pread_check(fileno(disk), &superblock, 512, 0);
     
     fclose(disk);
   }
@@ -90,7 +126,6 @@ static void* fat_init(struct fuse_conn_info *conn) {
   // file doesn't exist
   else {
     disk = fopen(cwd, "w+");
-    
     fseek(disk, 10000000-1, SEEK_SET);
     fputc(0, disk);
     
@@ -100,27 +135,11 @@ static void* fat_init(struct fuse_conn_info *conn) {
     // make superblock
     superblock.s.root_address = 10272; //512 + 2440*4 (superblock + FAT)
     superblock.s.block_size = 4096; // our assumed uniform block size - check this
-    pwrite(fileno(disk), &superblock, 512, 0); // write to disk
-
-    // make an array of dir_ent and populate with . and .. 4096/32=128 , write to disk at block zero
-    struct dir_ent root_data[128];
-    for(int i=2; i < 128 ; i++){
-      root_data[i].type = EMPTY_T;
-    }
-
-    strcpy(&root_data[0].file_name, ".");
-    root_data[0].type = DIR_T;
-    root_data[0].first_cluster = 0;
-    root_data[0].size = 4096;
-    
-    strcpy(&root_data[1].file_name, "..");
-    root_data[1].type = DIR_T;
-    root_data[1].first_cluster = 0;
-    root_data[1].size = 4096;
-
-    pwrite(fileno(disk), &root_data, 4096, 10272);
-    
+    pwrite_check(fileno(disk), &superblock, 512, 0); // write to disk
     fclose(disk);
+    
+    // make an array of dir_ent and populate with . and .. 4096/32=128 , write to disk at block zero
+    mkdir_helper(0, 0);
   }
   
   // create free list
@@ -158,7 +177,7 @@ static int fat_mkdir(const char* path, mode_t mode){
 	
     // read in directory data
     disk = fopen(cwd, "r+");
-    pread(fileno(disk), &dir_data, 4096, block_address);
+    pread_check(fileno(disk), &dir_data, 4096, block_address);
     fclose(disk);
 
     // iterate through all dir_ent looking for one w/ file_name of path_piece
@@ -172,49 +191,42 @@ static int fat_mkdir(const char* path, mode_t mode){
     path_piece = strtok(NULL, "/");
     if(!exists && path_piece!=NULL){return -ENOENT;}
   }
+
+  // we are in the directory where the new directory will go
   disk = fopen(cwd, "r+");
-  pread(fileno(disk), &dir_data, 4096, block_address);
+  // read in all dir_ent 
+  pread_check(fileno(disk), &dir_data, 4096, block_address);
   fclose(disk);
 
+  // looking for first dir_ent that is empty - that is where we put the new dir
   for (int i=0; i<128; i++){
     if(dir_data[i].type==EMPTY_T){
       int new_block = freeListHead-> value;
-      freeListHead = freeListHead->next;
-      strcpy(dir_data[i].file_name, new_dir_name);
+      freeListHead = freeListHead->next; // update free list - add check for not null
+      strcpy(dir_data[i].file_name, new_dir_name); //updates data by adding new dir as dir_ent
       dir_data[i].type = DIR_T;
       dir_data[i].size = 4096;
       dir_data[i].first_cluster = new_block;
 
       disk = fopen(cwd, "r+");
-      pwrite(fileno(disk), &dir_data, 4096, block_address);
-
-      struct dir_ent new_dir_data[128];
-      for(int i=2; i<128; i++){
-	new_dir_data[i].type = EMPTY_T;
-      }
-
-      strcpy(&new_dir_data[0].file_name, ".");
-      new_dir_data[0].type = DIR_T;
-      new_dir_data[0].first_cluster = new_block;
-      new_dir_data[0].size = 4096;
-
-      strcpy(&new_dir_data[1].file_name, "..");
-      new_dir_data[1].type = DIR_T;
-      new_dir_data[1].first_cluster = compute_block(block_address);
-      new_dir_data[1].size = 4096;
-
-      pwrite(fileno(disk), &new_dir_data, 4096, compute_address(new_block));
+      pwrite_check(fileno(disk), &dir_data, 4096, block_address); // write to disk
       fclose(disk);
 
+      // write dir_ents for new data 
+      mkdir_helper(new_block, compute_block(block_address));
       return 0;
     }
   }
+  return -ENOSPC;
 }
 
 static int fat_getattr(const char *path, struct stat *stbuf){
   
   memset(stbuf, 0, sizeof(struct stat));
 
+  //  char *temp_path = NULL;
+  // strcpy(temp_path, path);
+  
   // case for root
   if(strcmp(path, "/")==0){
     stbuf->st_mode = S_IFDIR | 0755;
@@ -222,7 +234,7 @@ static int fat_getattr(const char *path, struct stat *stbuf){
     return 0;
   }
 
-  int data_offset; // the offset within the block of the dir_ent for the directory we're looking for
+  int num_dir_ent = -1; // the offset within the block of the dir_ent for the directory we're looking for
   struct dir_ent dir_data[128]; // array of dir_ent to hold data of a directory
   int block_address = superblock.s.root_address; // block address starts as that of the superblock
 
@@ -232,26 +244,26 @@ static int fat_getattr(const char *path, struct stat *stbuf){
     
     // read in dir_data
     FILE *d = fopen(cwd, "r+");
-    pread(fileno(d), &dir_data, 4096, block_address);
+    pread_check(fileno(d), &dir_data, 4096, block_address);
     fclose(d);
     
-    data_offset = -1;
+    num_dir_ent = -1;
     // look through each dir_ent to find path_piece
     for (int i=0; i<128; i++){
       if(dir_data[i].type != EMPTY_T && strcmp(path_piece, dir_data[i].file_name)==0){
-	data_offset = i;
+	num_dir_ent = i;
 	block_address = compute_address(dir_data[i].first_cluster);
 	break;
       }
     }
     // if path_piece isn't a file_name of any dir_ent, it doesn't exist (data_offset hasn't been changed from initial -1 val)
-    if(data_offset==-1){ return -ENOENT;}
+    if(num_dir_ent==-1){ return -ENOENT;}
 
     // look at next part of path name
     path_piece = strtok(NULL, "/");
   }
   stbuf->st_mode = S_IFDIR | 0755;
-  stbuf->st_size = dir_data[data_offset].size;
+  stbuf->st_size = dir_data[num_dir_ent].size;
   return 0;
 }
 
@@ -272,7 +284,7 @@ static int fat_access(const char* path, int mask ){
     exists = false;
     disk = fopen(cwd, "r+");
     // read in directory entries
-    pread(fileno(disk), &dir_data, 4096, block_address);
+    pread_check(fileno(disk), &dir_data, 4096, block_address);
     fclose(disk);
 
     // iterate through all dir_ent looking for path_piece
@@ -287,7 +299,7 @@ static int fat_access(const char* path, int mask ){
     if(!exists){
       return -ENOENT;
     }
-    path_piece = strtok(NULL, "/");
+    path_piece = strtok(NULL, "/"); // move on to next path piece
   }
   return 0;
 }
@@ -296,12 +308,14 @@ static int fat_readdir(const char* path, void* buf, fuse_fill_dir_t filler, off_
   (void) offset;
   (void) fi;
 
+ 
   struct dir_ent dir_data[128];
   int block_address = superblock.s.root_address;
   char * path_piece = strtok(path, "/");
 
   bool exists = false;
   FILE *disk;
+  // start looking in root for the thing you want to read
   if(strcmp(path, "/")==0){ exists = true;}
 
   while(path_piece != NULL){
@@ -309,24 +323,25 @@ static int fat_readdir(const char* path, void* buf, fuse_fill_dir_t filler, off_
 
     // read in directory data
     disk = fopen(cwd, "r+");
-    pread(fileno(disk), &dir_data, 4096, block_address);
+    pread_check(fileno(disk), &dir_data, 4096, block_address);
     fclose(disk);
 
     // iterate through all dir_ent looking for one w/ file_name of path_piece
     for(int i=0; i<128; i++){
-      if(dir_data[i].type != EMPTY_T && strcmp(path_piece, dir_data[i].file_name)==0){
+      if(dir_data[i].type != EMPTY_T && strcmp(path_piece, dir_data[i].file_name)==0){ // found the match
 	exists = true;
 	block_address = compute_address(dir_data[i].first_cluster);
 	break;
       }
     }
     if(!exists){return -ENOENT;}
-    path_piece = strtok(NULL, "/");
+    path_piece = strtok(NULL, "/"); // moving on to next part of path name
   }
   disk = fopen(cwd, "r+");
-  pread(fileno(disk), &dir_data, 4096, block_address);
+  // read dir_ent of that directory
+  pread_check(fileno(disk), &dir_data, 4096, block_address);
   fclose(disk);
-  
+  // iterate through dir_ents
   for(int i=0; i<128; i++){
     if(dir_data[i].type != EMPTY_T){
       filler(buf, dir_data[i].file_name, NULL, 0);
