@@ -165,7 +165,7 @@ static int fat_mkdir(const char* path, mode_t mode){
   
   struct dir_ent dir_data[128];
   int block_address = superblock.s.root_address;
-  char * path_piece = strtok(path, "/");
+  char * path_piece = strtok((char *)path, "/");
   bool exists = false;
   FILE *disk;
   char * new_dir_name;
@@ -239,7 +239,7 @@ static int fat_getattr(const char *path, struct stat *stbuf){
   int block_address = superblock.s.root_address; // block address starts as that of the superblock
 
   // parse path name, separating by "/"
-  char * path_piece = strtok(path, "/");
+  char * path_piece = strtok((char *)path, "/");
   while(path_piece != NULL){
     
     // read in dir_data
@@ -275,7 +275,7 @@ static int fat_access(const char* path, int mask ){
   
   struct dir_ent dir_data[128];
   int block_address = superblock.s.root_address;
-  char * path_piece = strtok(path, "/");
+  char * path_piece = strtok((char *)path, "/");
 
   // look at each dir of path name to see if that dir exists
   bool exists;
@@ -311,7 +311,7 @@ static int fat_readdir(const char* path, void* buf, fuse_fill_dir_t filler, off_
  
   struct dir_ent dir_data[128];
   int block_address = superblock.s.root_address;
-  char * path_piece = strtok(path, "/");
+  char * path_piece = strtok((char *)path, "/");
 
   bool exists = false;
   FILE *disk;
@@ -349,6 +349,39 @@ static int fat_readdir(const char* path, void* buf, fuse_fill_dir_t filler, off_
   }
   return 0;
 }
+
+// removes the given file but not the directory 
+static int fat_unlink(const char* path){}
+
+// removes the directory, if empty (except for "." "..") 
+static int fat_rmdir(const char* path){}
+
+// makes a plain file
+static int fat_create(const char* path, mode_t mode){}
+
+// free temporarily allocated data structures
+static int fat_release(const char* path, struct fat_file_info* fi){}
+
+// write size bytes from buf to file, starting at offset
+static int fat_write(const char* path, const char* buf, size_t size, off_t offset, struct fuse_file_info *fi){}
+
+// read size bytes from file, starting at offset
+static int fat_read(const char* path, char* buf, size_t size, off_t offset, struct fuse_file_info *fi){}
+
+//
+static int fat_truncate(const char* path, off_t size){}
+
+//
+static int fat_fgetattr(const char* path, struct stat* stbuff, struct fuse_file_info* fi){}
+
+//
+static int fat_mknod(const char* path, mode_t mode, dev_t rdev){}
+
+//
+static int fat_statfs(const char* path, struct statvfs* stbuf){}
+
+//
+static int fat_symlink(const char* to, const char* from){}
 
 static struct fuse_operations fat_operations = {
 	.init		= fat_init,
