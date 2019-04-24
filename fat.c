@@ -150,29 +150,38 @@ static int find_file(const char *path){
       }
     }
     // if path_piece isn't a file_name of any dir_ent, it doesn't exist (data_offset hasn't been changed from initial -1 val)
-    if(num_dir_ent==-1){ return -ENOENT;}
     path_piece = strtok(NULL, "/");
+    if(num_dir_ent==-1){ return -ENOENT;}
   }
 
   block_address = compute_address(dir_data[num_dir_ent].first_cluster);
   return block_address;
 }
 
-// return the num_dir_ent at which the path's dir_ent is in dir_data
+// return the num_dir_ent at which the path's dir_ent is in dir_data and block_address 
 // (and populates dir_data with the directory entries of the directory containing path)
-static int find_file_dir_ent(const char *path, struct dir_ent * dir_data){
+struct file_info {
+  int block_address;
+  int num_dir_ent;
+};
+static struct file_info find_file_dir_ent(const char *path, struct dir_ent * dir_data){
   int block_address = superblock.s.root_address;
   char * path_piece = strtok((char *) path, "/");
+  
   int num_dir_ent = -1;
   FILE *disk;
+  struct file_info result;
   
   if (strcmp(path, "/")==0){
     disk = fopen(cwd, "r+");
     pread_check(fileno(disk), dir_data, BLOCK_SIZE, block_address);
     fclose(disk);
-    return 0;
+    result.block_address = block_address;
+    result.num_dir_ent = 0;
+    return result;
   }
 
+  int pre_address = block_address;
   while(path_piece != NULL){
     num_dir_ent = -1;
 
@@ -183,17 +192,22 @@ static int find_file_dir_ent(const char *path, struct dir_ent * dir_data){
     for(int i=0; i<BLOCK_SIZE/32; i++){
       if(dir_data[i].type != EMPTY_T && strcmp(path_piece, dir_data[i].file_name)==0){
 	num_dir_ent = i;
+	pre_address = block_address;
 	block_address = compute_address(dir_data[i].first_cluster);
 	break;
       }
     }
-    if(num_dir_ent==-1){return -ENOENT;}
-
+    if(num_dir_ent==-1){return;}
     path_piece = strtok(NULL, "/");
   }
 
-  return num_dir_ent;
-  
+  disk = fopen(cwd, "r+");
+  pread_check(fileno(disk), dir_data, BLOCK_SIZE, pre_address);
+  fclose(disk);
+
+  result.block_address = block_address;
+  result.num_dir_ent = num_dir_ent;
+  return result;  
 }
 
 
@@ -203,8 +217,6 @@ static int find_file_dir_ent(const char *path, struct dir_ent * dir_data){
 
 static void* fat_init(struct fuse_conn_info *conn) {
 
-  //  printf("\n\ndir size: %lu\n\n", sizeof(struct dir_ent));
-  
   strcat(cwd, "/fat_disk");
   FILE *disk;
 
@@ -293,6 +305,7 @@ static int fat_mkdir(const char* path, mode_t mode){
   // read in all dir_ent 
   pread_check(fileno(disk), &dir_data, BLOCK_SIZE, block_address);
   fclose(disk);
+
 
   // looking for first dir_ent that is empty - that is where we put the new dir
   for (int i=0; i<BLOCK_SIZE/32; i++){
@@ -428,22 +441,22 @@ static int fat_rmdir(const char* path){
     }
   }
 
-  int num_dir_ent = find_file_dir_ent(path, &dir_data);
-  dir_data[num_dir_ent].type = EMPTY_T;
+  struct file_info f = find_file_dir_ent(path, &dir_data);
+  dir_data[f.num_dir_ent].type = EMPTY_T;
 
   disk = fopen(cwd, "r+");
-  pwrite_check(fileno(disk), &dir_data, BLOCK_SIZE, block_address);
+  pwrite_check(fileno(disk), &dir_data, BLOCK_SIZE, f.block_address);
   fclose(disk);
 
   // add to free list
   if (freeListTail != NULL){
     struct Node * newTail = (struct Node*)malloc(sizeof(struct Node));
-    newTail -> value = compute_block(block_address);
+    newTail -> value = compute_block(f.block_address);
     freeListTail ->next = newTail;
     freeListTail = freeListTail -> next;
   } else{
     freeListHead = (struct Node *)malloc(sizeof(struct Node));
-    freeListHead-> value = compute_block(block_address);
+    freeListHead-> value = compute_block(f.block_address);
     freeListTail = freeListHead;
   }
   return 0;
