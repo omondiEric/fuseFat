@@ -159,6 +159,7 @@ static int find_file(const char *path){
   return block_address;
 }
 
+/*
 // return the num_dir_ent at which the path's dir_ent is in dir_data and block_address 
 // (and populates dir_data with the directory entries of the directory containing path)
 struct file_info {
@@ -182,7 +183,6 @@ static struct file_info find_file_dir_ent(const char *path, struct dir_ent * dir
     return result;
   }
 
-  int pre_address = block_address;
   while(path_piece != NULL){
     num_dir_ent = -1;
 
@@ -193,7 +193,6 @@ static struct file_info find_file_dir_ent(const char *path, struct dir_ent * dir
     for(int i=0; i<BLOCK_SIZE/32; i++){
       if(dir_data[i].type != EMPTY_T && strcmp(path_piece, dir_data[i].file_name)==0){
 	num_dir_ent = i;
-	pre_address = block_address;
 	block_address = compute_address(dir_data[i].first_cluster);
 	break;
       }
@@ -203,15 +202,15 @@ static struct file_info find_file_dir_ent(const char *path, struct dir_ent * dir
   }
 
   disk = fopen(cwd, "r+");
-  pread_check(fileno(disk), dir_data, BLOCK_SIZE, pre_address);
+  pread_check(fileno(disk), dir_data, BLOCK_SIZE, block_address);
   fclose(disk);
 
-  printf("pre: %d\n", pre_address);
-  result.block_address = pre_address;
+  printf("pre: %d\n", block_address);
+  result.block_address = block_address;
   result.num_dir_ent = num_dir_ent;
   return result;  
 }
-
+*/
 
 /* 
  * FUSE functions
@@ -286,6 +285,7 @@ static int make_new(const char* path, int mode){
   if(strcmp(path, "/")==0){ exists = true;}
 
   while(path_piece !=NULL){
+
     new_dir_name = path_piece;
     exists = false;
 	
@@ -315,11 +315,13 @@ static int make_new(const char* path, int mode){
   // looking for first dir_ent that is empty - that is where we put the new dir
   for (int i=0; i<BLOCK_SIZE/32; i++){
     if(dir_data[i].type==EMPTY_T){
+
       //      printf("mkdir dir_ent in %d \n %d \n\n", block_address, i);
 
       int new_block = freeListHead-> value;
       freeListHead = freeListHead->next; // update free list - add check for not null
       strcpy(dir_data[i].file_name, new_dir_name); //updates data by adding new dir as dir_ent
+
       if(mode==DIR_T){
 	
 	mkdir_helper(new_block, compute_block(block_address));
@@ -338,8 +340,6 @@ static int make_new(const char* path, int mode){
       pwrite_check(fileno(disk), &dir_data, BLOCK_SIZE, block_address); // write to disk
       fclose(disk);
 
-      // write dir_ents for new data
-      
       return 0;
     }
   }
@@ -524,7 +524,7 @@ static int fat_mknod(const char* path, mode_t mode, dev_t rdev){
 }
 
 // makes a plain file
-static int fat_create(const char* path, mode_t mode){
+static int fat_fcreate(const char* path, mode_t mode){
   return make_new(path, FILE_T);
 }
 
@@ -535,16 +535,65 @@ static int fat_create(const char* path, mode_t mode){
 //static int fat_write(const char* path, const char* buf, size_t size, off_t offset, struct fuse_file_info *fi){}
 
 // read size bytes from file, starting at offset
-//static int fat_read(const char* path, char* buf, size_t size, off_t offset, struct fuse_file_info *fi){}
+static int fat_read(const char* path, char* buf, size_t size, off_t offset, struct fuse_file_info *fi){
+
+  // block_address is the address at which data of path begins
+  int block_address = find_file(path);
+
+  int start_read_block = compute_block(block_address);
+  // account for offset (potentially a later block)
+  while(offset > BLOCK_SIZE){
+    start_read_block = FAT[start_read_block];
+    offset -= BLOCK_SIZE;
+  }
+  // now offset is offset%BLOCK_SIZE
+  block_address = compute_address(start_read_block);
+
+  char data_block[BLOCK_SIZE];
+  FILE *disk;
+
+  // First read might start at an offset of a block (not from start of block)
+  // read a block of data from disk
+  disk = fopen(cwd, "r+");
+  pread_check(fileno(disk), &data_block, BLOCK_SIZE, block_address);
+  fclose(disk);
+
+  // put appropriate amount into read buffer
+  int block_read_size = size%BLOCK_SIZE;
+  if(block_read_size==0){ block_read_size = BLOCK_SIZE;} 
+  memcpy(buf, data_block+offset, block_read_size-offset); // subtract offset from amount to put in buf 
+
+  int amt_read = block_read_size-offset;
+
+  // now reading blocks from their start
+  while(amt_read != size){ // since size could be larger than 1 block
+
+    // use FAT to find next block of file
+    int next_block = FAT[compute_block(block_address)];
+    if(next_block ==0){ break; }
+    block_address = compute_address(next_block);
+
+    // read a block of data from disk
+    disk = fopen(cwd, "r+");
+    pread_check(fileno(disk), &data_block, BLOCK_SIZE, block_address);
+    fclose(disk);
+
+    // calculate amount of this block to put in buf
+    block_read_size = (size-amt_read)%BLOCK_SIZE;
+    if(block_read_size==0){ block_read_size = BLOCK_SIZE;}
+    memcpy(buf+amt_read, data_block, block_read_size);
+    
+    amt_read += block_read_size;
+  }
+  return 0;
+}
 
 //
 //static int fat_truncate(const char* path, off_t size){}
 
-//
 static int fat_fgetattr(const char* path, struct stat* stbuf, struct fuse_file_info* fi){
-  fat_getattr(path, stbuf);
+  return fat_getattr(path, stbuf);
 }
-
 
 // iterate through free list and count++
 static int fat_statfs(const char* path, struct statvfs* stbuf){
@@ -569,12 +618,12 @@ static struct fuse_operations fat_operations = {
 	.fgetattr       = fat_fgetattr,
 	.statfs		= fat_statfs,
 	.rmdir		= fat_rmdir,
-	.open		= fat_open,	
+	.open		= fat_open,
+	.mknod		= fat_mknod,
+	//	.create		= fat_fcreate,
 
 /*
 	.readlink	= NULL,
-	.mknod		= NULL,
-	.create		= NULL,
 	.symlink	= NULL,
 	.unlink		= NULL,
 	.rename		= NULL,
@@ -583,7 +632,6 @@ static struct fuse_operations fat_operations = {
 	.chown		= NULL,
 	.truncate	= NULL,
 	.utimens	= NULL,
-
 	.read		= NULL,
 	.write		= NULL,
 	.release	= NULL,
