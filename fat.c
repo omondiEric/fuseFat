@@ -133,6 +133,7 @@ static int find_file(const char *path){
 
   // parse path name, separating by "/"
   char * path_piece = strtok((char *)path, "/");
+
   while(path_piece != NULL){
     
     // read in dir_data
@@ -205,7 +206,8 @@ static struct file_info find_file_dir_ent(const char *path, struct dir_ent * dir
   pread_check(fileno(disk), dir_data, BLOCK_SIZE, pre_address);
   fclose(disk);
 
-  result.block_address = block_address;
+  printf("pre: %d\n", pre_address);
+  result.block_address = pre_address;
   result.num_dir_ent = num_dir_ent;
   return result;  
 }
@@ -270,7 +272,10 @@ static void* fat_init(struct fuse_conn_info *conn) {
 }
 
 static int fat_mkdir(const char* path, mode_t mode){
-  
+  if(freeListHead==NULL){
+    return -ENOMEM;
+  }
+
   struct dir_ent dir_data[BLOCK_SIZE/32];
   int block_address = superblock.s.root_address;
   char * path_piece = strtok((char *)path, "/");
@@ -306,10 +311,12 @@ static int fat_mkdir(const char* path, mode_t mode){
   pread_check(fileno(disk), &dir_data, BLOCK_SIZE, block_address);
   fclose(disk);
 
-
   // looking for first dir_ent that is empty - that is where we put the new dir
   for (int i=0; i<BLOCK_SIZE/32; i++){
     if(dir_data[i].type==EMPTY_T){
+
+      printf("mkdir dir_ent in %d \n %d \n\n", block_address, i);
+
       int new_block = freeListHead-> value;
       freeListHead = freeListHead->next; // update free list - add check for not null
       strcpy(dir_data[i].file_name, new_dir_name); //updates data by adding new dir as dir_ent
@@ -419,48 +426,76 @@ static int fat_readdir(const char* path, void* buf, fuse_fill_dir_t filler, off_
   return 0;
 }
 
-// removes the given file but not the directory 
-//static int fat_unlink(const char* path){}
-
-// removes the directory, if empty (except for "." "..") 
 static int fat_rmdir(const char* path){
-  // check if empty
+
+  // cannot remove root
+  if(strcmp(path, "/")==0){
+    return -ENOENT;
+  }
+  
+  FILE * d;
+  int num_dir_ent = -1;
   struct dir_ent dir_data[BLOCK_SIZE/32];
-  FILE *disk;
+  int block_address = superblock.s.root_address;
+  int prev_addr = block_address;
 
-  // address of directory data
-  int block_address = find_file(path);
+  char * path_piece = strtok((char *)path, "/");
+  while(path_piece != NULL){
+    
+    // read in dir_data
+    d = fopen(cwd, "r+");
+    pread_check(fileno(d), &dir_data, BLOCK_SIZE, block_address);
+    fclose(d);
+    
+    num_dir_ent = -1;
+    // look through each dir_ent to find path_piece
+    for (int i=0; i<BLOCK_SIZE/32; i++){
+      if(dir_data[i].type != EMPTY_T && strcmp(path_piece, dir_data[i].file_name)==0){
+	num_dir_ent = i;
+	prev_addr = block_address;
+	block_address = compute_address(dir_data[i].first_cluster);
+	break;
+      }
+    }
+    path_piece = strtok(NULL, "/");
+    if(num_dir_ent==-1){ return -ENOENT;}
+  }
 
-  disk = fopen(cwd, "r+");
-  pread_check(fileno(disk), &dir_data, BLOCK_SIZE, block_address);
-  fclose(disk);
-  for(int i=2; i <BLOCK_SIZE/32; i++){
-    if(dir_data[i].type != EMPTY_T){
-      // return some error. Non-empty directory
+  // checks that directory is empty
+  d = fopen(cwd, "r+");
+  pread_check(fileno(d), &dir_data, BLOCK_SIZE, block_address);
+  fclose(d);
+  for(int i=2; i<BLOCK_SIZE/32; i++){
+    if(dir_data[i].type !=EMPTY_T){
       return -ENOTEMPTY;
     }
   }
 
-  struct file_info f = find_file_dir_ent(path, &dir_data);
-  dir_data[f.num_dir_ent].type = EMPTY_T;
+  d = fopen(cwd, "r+");
+  pread_check(fileno(d), &dir_data, BLOCK_SIZE, prev_addr);
+  fclose(d);
 
-  disk = fopen(cwd, "r+");
-  pwrite_check(fileno(disk), &dir_data, BLOCK_SIZE, f.block_address);
-  fclose(disk);
+  // changes directory entry of removed dir to EMPTY
+  dir_data[num_dir_ent].type = EMPTY_T;
+
+  d = fopen(cwd, "r+");
+  pwrite_check(fileno(d), &dir_data, BLOCK_SIZE, prev_addr);
+  fclose(d);
 
   // add to free list
   if (freeListTail != NULL){
     struct Node * newTail = (struct Node*)malloc(sizeof(struct Node));
-    newTail -> value = compute_block(f.block_address);
+    newTail -> value = compute_block(block_address);
     freeListTail ->next = newTail;
     freeListTail = freeListTail -> next;
   } else{
     freeListHead = (struct Node *)malloc(sizeof(struct Node));
-    freeListHead-> value = compute_block(f.block_address);
+    freeListHead-> value = compute_block(block_address);
     freeListTail = freeListHead;
   }
-  return 0;
+  return 0;  
 }
+
 
 // makes a plain file
 //static int fat_create(const char* path, mode_t mode){}
