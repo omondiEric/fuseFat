@@ -271,7 +271,8 @@ static void* fat_init(struct fuse_conn_info *conn) {
   return NULL;
 }
 
-static int fat_mkdir(const char* path, mode_t mode){
+static int make_new(const char* path, int mode){
+  
   if(freeListHead==NULL){
     return -ENOMEM;
   }
@@ -314,34 +315,44 @@ static int fat_mkdir(const char* path, mode_t mode){
   // looking for first dir_ent that is empty - that is where we put the new dir
   for (int i=0; i<BLOCK_SIZE/32; i++){
     if(dir_data[i].type==EMPTY_T){
-
-      printf("mkdir dir_ent in %d \n %d \n\n", block_address, i);
+      //      printf("mkdir dir_ent in %d \n %d \n\n", block_address, i);
 
       int new_block = freeListHead-> value;
       freeListHead = freeListHead->next; // update free list - add check for not null
       strcpy(dir_data[i].file_name, new_dir_name); //updates data by adding new dir as dir_ent
-      dir_data[i].type = DIR_T;
-      dir_data[i].size = BLOCK_SIZE;
-      dir_data[i].first_cluster = new_block;
+      if(mode==DIR_T){
+	
+	mkdir_helper(new_block, compute_block(block_address));
+	
+	dir_data[i].type = DIR_T;
+	dir_data[i].size = BLOCK_SIZE;
+	dir_data[i].first_cluster = new_block;
+      }
+      if(mode==FILE_T){
+	dir_data[i].type = FILE_T;
+	dir_data[i].size = 0;
+	dir_data[i].first_cluster = new_block;
+      }
 
       disk = fopen(cwd, "r+");
       pwrite_check(fileno(disk), &dir_data, BLOCK_SIZE, block_address); // write to disk
       fclose(disk);
 
-      // write dir_ents for new data 
-      mkdir_helper(new_block, compute_block(block_address));
+      // write dir_ents for new data
+      
       return 0;
     }
   }
   return -ENOSPC;
 }
 
+static int fat_mkdir(const char* path, mode_t mode){
+  return make_new(path, DIR_T);
+}
+
 static int fat_getattr(const char *path, struct stat *stbuf){
   
   memset(stbuf, 0, sizeof(struct stat));
-
-  //  char *temp_path = NULL;
-  // strcpy(temp_path, path);
   
   // case for root
   if(strcmp(path, "/")==0){
@@ -496,9 +507,26 @@ static int fat_rmdir(const char* path){
   return 0;  
 }
 
+static int fat_open(const char* path, struct fuse_file_info* fi){
+  int addr = find_file(path);
+  if(addr==-ENOENT){
+    return -ENOENT;
+  }
+  return 0;
+}
+
+static int fat_mknod(const char* path, mode_t mode, dev_t rdev){
+  // only supports plain files
+  if(mode!=S_IFREG){
+    return -ENOSYS;
+  }
+  return make_new(path, FILE_T);
+}
 
 // makes a plain file
-//static int fat_create(const char* path, mode_t mode){}
+static int fat_create(const char* path, mode_t mode){
+  return make_new(path, FILE_T);
+}
 
 // free temporarily allocated data structures
 //static int fat_release(const char* path, struct fat_file_info* fi){}
@@ -509,7 +537,7 @@ static int fat_rmdir(const char* path){
 // read size bytes from file, starting at offset
 //static int fat_read(const char* path, char* buf, size_t size, off_t offset, struct fuse_file_info *fi){}
 
-// 
+//
 //static int fat_truncate(const char* path, off_t size){}
 
 //
@@ -517,8 +545,6 @@ static int fat_fgetattr(const char* path, struct stat* stbuf, struct fuse_file_i
   fat_getattr(path, stbuf);
 }
 
-//
-//static int fat_mknod(const char* path, mode_t mode, dev_t rdev){}
 
 // iterate through free list and count++
 static int fat_statfs(const char* path, struct statvfs* stbuf){
@@ -532,7 +558,7 @@ static int fat_statfs(const char* path, struct statvfs* stbuf){
 }
 
 //
-static int fat_symlink(const char* to, const char* from){}
+//static int fat_symlink(const char* to, const char* from){}
 
 static struct fuse_operations fat_operations = {
 	.init		= fat_init,
@@ -542,8 +568,8 @@ static struct fuse_operations fat_operations = {
 	.readdir        = fat_readdir,
 	.fgetattr       = fat_fgetattr,
 	.statfs		= fat_statfs,
-	.rmdir		= fat_rmdir
-	
+	.rmdir		= fat_rmdir,
+	.open		= fat_open,	
 
 /*
 	.readlink	= NULL,
@@ -557,7 +583,7 @@ static struct fuse_operations fat_operations = {
 	.chown		= NULL,
 	.truncate	= NULL,
 	.utimens	= NULL,
-	.open		= NULL,
+
 	.read		= NULL,
 	.write		= NULL,
 	.release	= NULL,
@@ -578,6 +604,5 @@ int main(int argc, char *argv[]) {
 	if (getcwd(cwd, sizeof(cwd))==NULL){
 	    perror("error getting current directory");
 	  }
-	// printf("%s\n", cwd);
 	return fuse_main(argc, argv, &fat_operations, NULL);
 }
