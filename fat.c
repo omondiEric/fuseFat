@@ -332,7 +332,7 @@ static int make_new(const char* path, int mode){
       }
       if(mode==FILE_T){
 	dir_data[i].type = FILE_T;
-	dir_data[i].size = 0;
+	dir_data[i].size = BLOCK_SIZE; //???
 	dir_data[i].first_cluster = new_block;
       }
 
@@ -529,21 +529,22 @@ static int fat_fcreate(const char* path, mode_t mode){
 }
 
 // free temporarily allocated data structures
-//static int fat_release(const char* path, struct fat_file_info* fi){}
-
-// write size bytes from buf to file, starting at offset
-//static int fat_write(const char* path, const char* buf, size_t size, off_t offset, struct fuse_file_info *fi){}
+static int fat_release(const char* path, struct fat_file_info* fi){
+  return 0;
+}
 
 // read size bytes from file, starting at offset
 static int fat_read(const char* path, char* buf, size_t size, off_t offset, struct fuse_file_info *fi){
 
   // block_address is the address at which data of path begins
   int block_address = find_file(path);
+  if(block_address == -ENOENT){ return 0;}
 
   int start_read_block = compute_block(block_address);
   // account for offset (potentially a later block)
   while(offset > BLOCK_SIZE){
     start_read_block = FAT[start_read_block];
+    if( start_read_block == 0){ return 0;}
     offset -= BLOCK_SIZE;
   }
   // now offset is offset%BLOCK_SIZE
@@ -559,18 +560,18 @@ static int fat_read(const char* path, char* buf, size_t size, off_t offset, stru
   fclose(disk);
 
   // put appropriate amount into read buffer
-  int block_read_size = size%BLOCK_SIZE;
-  if(block_read_size==0){ block_read_size = BLOCK_SIZE;} 
-  memcpy(buf, data_block+offset, block_read_size-offset); // subtract offset from amount to put in buf 
+  int block_read_size = size;
+  if(size + offset > BLOCK_SIZE){ block_read_size = BLOCK_SIZE - offset;}
+  memcpy(buf, data_block+offset, block_read_size); // subtract offset from amount to put in buf 
 
-  int amt_read = block_read_size-offset;
+  int amt_read = block_read_size;
 
   // now reading blocks from their start
   while(amt_read != size){ // since size could be larger than 1 block
 
     // use FAT to find next block of file
     int next_block = FAT[compute_block(block_address)];
-    if(next_block ==0){ break; }
+    if(next_block ==0){ return amt_read; }
     block_address = compute_address(next_block);
 
     // read a block of data from disk
@@ -579,17 +580,108 @@ static int fat_read(const char* path, char* buf, size_t size, off_t offset, stru
     fclose(disk);
 
     // calculate amount of this block to put in buf
-    block_read_size = (size-amt_read)%BLOCK_SIZE;
-    if(block_read_size==0){ block_read_size = BLOCK_SIZE;}
+    block_read_size = size - amt_read;
+    if(block_read_size >= BLOCK_SIZE){ block_read_size = BLOCK_SIZE;}
     memcpy(buf+amt_read, data_block, block_read_size);
     
     amt_read += block_read_size;
   }
-  return 0;
+  return amt_read;
 }
 
-//
-//static int fat_truncate(const char* path, off_t size){}
+//write size bytes to buff
+static int fat_write(const char* path, const char* buf, size_t size, off_t offset, struct fuse_file_info *fi){
+  
+  // block_address is the address at which data of path begins
+  int block_address = find_file(path);
+  if(block_address == -ENOENT){ return -ENOENT;}
+
+  int start_write_block = compute_block(block_address);
+  int next_block = start_write_block;
+  // account for offset (potentially a later block)
+  while(offset > BLOCK_SIZE){
+    //    start_write_block = FAT[start_write_block];
+    next_block = FAT[start_write_block];
+    // file not big enough
+    if( next_block == 0){
+      if(freeListHead==NULL){ return -ENOMEM; }
+      // gets next block from free list
+      FAT[start_write_block] = freeListHead->value;
+      next_block = freeListHead->value;
+      
+      freeListHead = freeListHead->next;
+    }
+    start_write_block = next_block;
+    offset -= BLOCK_SIZE;
+  }
+  // now offset is offset%BLOCK_SIZE
+  block_address = compute_address(start_write_block);
+
+  char data_block[BLOCK_SIZE];
+  FILE *disk;
+
+  // First write might start at an offset of a block (not from start of block)
+  // write a block of data to disk
+  disk = fopen(cwd, "r+");
+  pread_check(fileno(disk), &data_block, BLOCK_SIZE, block_address);
+  fclose(disk);
+
+  // put appropriate amount into write buffer
+  int block_write_size = size;
+  if(size + offset > BLOCK_SIZE){ block_write_size = BLOCK_SIZE - offset; }
+    
+  memcpy(data_block+offset, buf, block_write_size); // subtract offset from amount to put in buf 
+
+  // write to disk
+  disk = fopen(cwd, "r+");
+  pwrite_check(fileno(disk), &data_block, BLOCK_SIZE, block_address);
+  fclose(disk);
+  
+  int amt_written = block_write_size-offset;
+
+  // now writing to blocks from their start
+  while(amt_written != size){ // since size could be larger than 1 block
+
+    // use FAT to find next block of file
+    int next_block = FAT[compute_block(block_address)];
+    if(next_block == 0){ return amt_written; }
+    block_address = compute_address(next_block);
+
+    // read a block of data from disk
+    disk = fopen(cwd, "r+");
+    pread_check(fileno(disk), &data_block, BLOCK_SIZE, block_address);
+    fclose(disk);
+
+    // calculate amount of the buf to put in data
+    block_write_size = size - amt_written;
+    if(block_write_size >= BLOCK_SIZE){ block_write_size = BLOCK_SIZE;}
+    // put the buf into data
+    memcpy(data_block, buf+amt_written, block_write_size);
+
+    // write to disk
+    disk = fopen(cwd, "r+");
+    pwrite_check(fileno(disk), &data_block, BLOCK_SIZE, block_address);
+    fclose(disk);
+    
+    amt_written += block_write_size;
+  }
+  return amt_written;
+}
+
+// resize stuff
+static int fat_truncate(const char* path, off_t size){
+
+  // see how many blocks size takes (rounding up (size+(size%BLOCK_SIZE)/BLOCK_SIZE)
+  
+  // follow FAT, counting how many blocks are in the file
+  
+  // if file is too short, add blocks from freeList (updating FAT)
+  // if file is too long, iterate over remaining blocks and add to free list (& update FAT[] to 0)
+
+  // write FAT to disk
+
+  // update dir_ent size for path
+}
 
 static int fat_fgetattr(const char* path, struct stat* stbuf, struct fuse_file_info* fi){
   return fat_getattr(path, stbuf);
@@ -620,8 +712,9 @@ static struct fuse_operations fat_operations = {
 	.rmdir		= fat_rmdir,
 	.open		= fat_open,
 	.mknod		= fat_mknod,
-	//	.create		= fat_fcreate,
-
+	.write          = fat_write,
+	.read           = fat_read,
+	.create		= fat_fcreate
 /*
 	.readlink	= NULL,
 	.symlink	= NULL,
@@ -632,8 +725,6 @@ static struct fuse_operations fat_operations = {
 	.chown		= NULL,
 	.truncate	= NULL,
 	.utimens	= NULL,
-	.read		= NULL,
-	.write		= NULL,
 	.release	= NULL,
 	.fsync		= NULL,
 #ifdef HAVE_SETXATTR
