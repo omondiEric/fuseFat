@@ -687,7 +687,7 @@ static int fat_truncate(const char* path, off_t size){
     int next_block = FAT[block_address + BLOCK_SIZE];
     while(next_block != 0){
       numBlocks_path +=1;
-      next_block = next_block + BLOCK_SIZE;
+      next_block = FAT[block_address + BLOCK_SIZE];
     }
   }
   // if file is too short, add blocks from freeList (updating FAT)
@@ -705,11 +705,11 @@ static int fat_truncate(const char* path, off_t size){
     //update tail
     freeListTail -> next = FAT[last_block];
     freeListTail = freeListTail -> next;
-    numBlocks_path -=1;
+    numBlocks_path = numBlocks_path - 1;
   }
 
 
-  // update dir_ent size for path... parent = strdup(path), dirname(parent), strtok(dirname(parent))
+  // update dir_ent size for path
   char * path3 = strdup(path);
   struct dir_ent dir_data[BLOCK_SIZE/32];
   char * path_piece = strtok((char *)path, "/");
@@ -726,7 +726,7 @@ static int fat_truncate(const char* path, off_t size){
     pread_check(fileno(disk), &dir_data, BLOCK_SIZE, block_address);
     fclose(disk);
 
-    // iterate through all dir_ent looking for one w/ file_name of path_piece
+    // iterate through all dir_ent looking for one w/ file_name of path_piece/ OR DO WE WANT PARENT_PATH?????????????????????????????????????????????????????????????????????
     for(int i=0; i<BLOCK_SIZE/32; i++){
       if(dir_data[i].type != EMPTY_T && strcmp(path_piece, dir_data[i].file_name)==0){
 	exists = true;
