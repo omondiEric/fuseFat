@@ -681,7 +681,7 @@ static int fat_truncate(const char* path, off_t size){
   int numBlocks_path = 0;
   int block_address = -1;
   // follow FAT, counting how many blocks are in the file
-  if((block_address = compute_block(find_file(path2))) == -ENOENT){
+  if((block_address = compute_block(find_file(path2))) != -ENOENT){
      numBlocks_path += 1;
     //IS THIS THE CORRECT WAY OF GETTING NEXT BLOCK/ CHECK FOR END OF FILE
     int next_block = FAT[block_address + BLOCK_SIZE];
