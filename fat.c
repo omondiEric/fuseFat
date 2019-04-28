@@ -282,6 +282,14 @@ static int make_new(const char* path, int mode){
   bool exists = false;
   FILE *disk;
   char * new_dir_name;
+
+  //char* parent_path = strdup(path);
+  //parent_path = basename(path); // will have to free(file_path) and free(parent-path) at the end
+
+  
+
+
+
   if(strcmp(path, "/")==0){ exists = true;}
 
   while(path_piece !=NULL){
@@ -672,12 +680,34 @@ static int fat_write(const char* path, const char* buf, size_t size, off_t offse
 static int fat_truncate(const char* path, off_t size){
 
   // see how many blocks size takes (rounding up (size+(size%BLOCK_SIZE)/BLOCK_SIZE)
-  
+  int numBlocks_size = (size+(size%BLOCK_SIZE)/BLOCK_SIZE);
+  int numBlocks_path = 0;
   // follow FAT, counting how many blocks are in the file
-  
+  if(find_file(path) != -ENOENT){
+    int block_address = compute_block(find_file(path));
+    numBlocks_path += 1;
+    int next_block = FAT[block_address + BLOCK_SIZE];
+    while(next_block != 0){
+      numBlocks_path +=1;
+      next_block = next_block + BLOCK_SIZE;
+    }
+  }
   // if file is too short, add blocks from freeList (updating FAT)
+  while(numBlocks_size > numBlocks_path){
+    if(freeListHead == NULL){ return -ENOMEM;}
+    int new_block = freeListHead-> value;
+    freeListHead = freeListHead->next; // update free list
+    numBlocks_path = numBlocks_path + 1;
+    //update FAT
+    FAT[new_block] = freeListHead -> value;  
+  }
   // if file is too long, iterate over remaining blocks and add to free list (& update FAT[] to 0)
+  
 
+
+
+
+  
   // write FAT to disk
 
   // update dir_ent size for path
