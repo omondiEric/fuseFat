@@ -24,7 +24,7 @@
 
 #include <stdlib.h>
 #include <stdbool.h>
-
+#include <libgen.h>
 
 #define EMPTY_T 0
 #define FILE_T 1
@@ -285,10 +285,6 @@ static int make_new(const char* path, int mode){
 
   //char* parent_path = strdup(path);
   //parent_path = basename(path); // will have to free(file_path) and free(parent-path) at the end
-
-  
-
-
 
   if(strcmp(path, "/")==0){ exists = true;}
 
@@ -678,14 +674,16 @@ static int fat_write(const char* path, const char* buf, size_t size, off_t offse
 
 // resize stuff
 static int fat_truncate(const char* path, off_t size){
-
+  FILE *disk;
+  char * path2 = strdup(path);
   // see how many blocks size takes (rounding up (size+(size%BLOCK_SIZE)/BLOCK_SIZE)
   int numBlocks_size = (size+(size%BLOCK_SIZE)/BLOCK_SIZE);
   int numBlocks_path = 0;
+  int block_address = -1;
   // follow FAT, counting how many blocks are in the file
-  if(find_file(path) != -ENOENT){
-    int block_address = compute_block(find_file(path));
-    numBlocks_path += 1;
+  if((block_address = compute_block(find_file(path2))) == -ENOENT){
+     numBlocks_path += 1;
+    //IS THIS THE CORRECT WAY OF GETTING NEXT BLOCK/ CHECK FOR END OF FILE
     int next_block = FAT[block_address + BLOCK_SIZE];
     while(next_block != 0){
       numBlocks_path +=1;
@@ -702,15 +700,52 @@ static int fat_truncate(const char* path, off_t size){
     FAT[new_block] = freeListHead -> value;  
   }
   // if file is too long, iterate over remaining blocks and add to free list (& update FAT[] to 0)
-  
+  while(numBlocks_size < numBlocks_path){
+    int last_block = FAT[block_address];
+    //update tail
+    freeListTail -> next = FAT[last_block];
+    freeListTail = freeListTail -> next;
+    numBlocks_path -=1;
+  }
 
 
+  // update dir_ent size for path... parent = strdup(path), dirname(parent), strtok(dirname(parent))
+  char * path3 = strdup(path);
+  struct dir_ent dir_data[BLOCK_SIZE/32];
+  char * path_piece = strtok((char *)path, "/");
+  bool exists = false;
+  char * parent_path = dirname(path3);
+  if(strcmp(parent_path, "/")==0){ exists = true;}
 
+  while(path_piece !=NULL){
 
-  
+    exists = false;
+	
+    // read in directory data
+    disk = fopen(cwd, "r+");
+    pread_check(fileno(disk), &dir_data, BLOCK_SIZE, block_address);
+    fclose(disk);
+
+    // iterate through all dir_ent looking for one w/ file_name of path_piece
+    for(int i=0; i<BLOCK_SIZE/32; i++){
+      if(dir_data[i].type != EMPTY_T && strcmp(path_piece, dir_data[i].file_name)==0){
+	exists = true;
+	block_address = compute_address(dir_data[i].first_cluster);
+	//update size of dir data ??????????????????????????????????????????????????????
+	dir_data[i].size -= BLOCK_SIZE;
+	break;
+      }
+    }
+    path_piece = strtok(NULL, "/");
+    if(!exists && path_piece!=NULL){return -ENOENT;}
+  }
+
   // write FAT to disk
+  disk = fopen(cwd, "r+");
+  pwrite_check(fileno(disk), &dir_data, BLOCK_SIZE, block_address);
+  fclose(disk);
 
-  // update dir_ent size for path
+  return 0;
 }
 
 static int fat_fgetattr(const char* path, struct stat* stbuf, struct fuse_file_info* fi){
@@ -744,6 +779,8 @@ static struct fuse_operations fat_operations = {
 	.mknod		= fat_mknod,
 	.write          = fat_write,
 	.read           = fat_read,
+	.release	= fat_release,
+	.truncate	= fat_truncate,
 	.create		= fat_fcreate
 /*
 	.readlink	= NULL,
@@ -753,9 +790,7 @@ static struct fuse_operations fat_operations = {
 	.link		= NULL,
 	.chmod		= NULL,
 	.chown		= NULL,
-	.truncate	= NULL,
 	.utimens	= NULL,
-	.release	= NULL,
 	.fsync		= NULL,
 #ifdef HAVE_SETXATTR
 	.setxattr	= NULL,
