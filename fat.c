@@ -31,6 +31,10 @@
 #define DIR_T 2
 #define BLOCK_SIZE 4096
 
+//$ instead of storing cwd and opening/closing the disk each time,
+//$ you can open your disk in init and close it in destroy
+//$ Then you can store the fd as a global variable instead of cwd
+//$ This would save frequent open/close calls in each of your functions
 char cwd[256]; // current working directory
 int FAT[2440];
 
@@ -64,6 +68,9 @@ static int compute_address(int block_num){
 }
 
 static int compute_block(int address){
+  //$ No "magic numbers". Why 512? 2440? 4? 4096?
+  //$ Use constants so it clear what the numbers mean and easy to change
+  //$ parmeters. Instead of 4, use sizeof(int) and think about using int32_t
   return (address - 512 - (2440*4))/4096;
 }
 
@@ -108,7 +115,7 @@ static int mkdir_helper(int current_block, int parent_block){
 static void* fat_init(struct fuse_conn_info *conn) {
 
   //  printf("\n\ndir size: %lu\n\n", sizeof(struct dir_ent));
-  
+
   strcat(cwd, "/fat_disk");
   FILE *disk;
 
@@ -180,6 +187,7 @@ static int fat_mkdir(const char* path, mode_t mode){
     pread_check(fileno(disk), &dir_data, 4096, block_address);
     fclose(disk);
 
+    //$ why 128? No magic numbers
     // iterate through all dir_ent looking for one w/ file_name of path_piece
     for(int i=0; i<128; i++){
       if(dir_data[i].type != EMPTY_T && strcmp(path_piece, dir_data[i].file_name)==0){

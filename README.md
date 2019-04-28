@@ -10,6 +10,11 @@ For full details see: [Lab Handout](http://cs.williams.edu/~jannen/teaching/s19/
 
 Steve, Julia and Julia are the sole contributors to this repository. 
 
+ * Important information to add:
+   * How do you specify/change the "backing file" that your fat.c uses to write its data?
+   * To run fat, you may want to add the `-s` and `-f` flags so that it is single threaded and running in the foreground.
+   * Your maximum path name is 20 bytes.
+
 To run:
 ```
 $ make
