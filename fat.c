@@ -689,6 +689,7 @@ static int fat_truncate(const char* path, off_t size){
       numBlocks_path +=1;
       next_block = FAT[block_address + BLOCK_SIZE];
     }
+    free(path2);
   }
   // if file is too short, add blocks from freeList (updating FAT)
   while(numBlocks_size > numBlocks_path){
@@ -712,9 +713,9 @@ static int fat_truncate(const char* path, off_t size){
   // update dir_ent size for path
   char * path3 = strdup(path);
   struct dir_ent dir_data[BLOCK_SIZE/32];
-  char * path_piece = strtok((char *)path, "/");
-  bool exists = false;
   char * parent_path = dirname(path3);
+  char * path_piece = strtok((char *)parent_path, "/");
+  bool exists = false;
   if(strcmp(parent_path, "/")==0){ exists = true;}
 
   while(path_piece !=NULL){
@@ -726,7 +727,7 @@ static int fat_truncate(const char* path, off_t size){
     pread_check(fileno(disk), &dir_data, BLOCK_SIZE, block_address);
     fclose(disk);
 
-    // iterate through all dir_ent looking for one w/ file_name of path_piece/ OR DO WE WANT PARENT_PATH?????????????????????????????????????????????????????????????????????
+    // iterate through all dir_ent looking for one w/ file_name of path_piece
     for(int i=0; i<BLOCK_SIZE/32; i++){
       if(dir_data[i].type != EMPTY_T && strcmp(path_piece, dir_data[i].file_name)==0){
 	exists = true;
@@ -739,12 +740,12 @@ static int fat_truncate(const char* path, off_t size){
     path_piece = strtok(NULL, "/");
     if(!exists && path_piece!=NULL){return -ENOENT;}
   }
-
+  
   // write FAT to disk
   disk = fopen(cwd, "r+");
   pwrite_check(fileno(disk), &dir_data, BLOCK_SIZE, block_address);
   fclose(disk);
-
+  free(path3);
   return 0;
 }
 
@@ -762,9 +763,6 @@ static int fat_statfs(const char* path, struct statvfs* stbuf){
   }
   return count;
 }
-
-//
-//static int fat_symlink(const char* to, const char* from){}
 
 static struct fuse_operations fat_operations = {
 	.init		= fat_init,
