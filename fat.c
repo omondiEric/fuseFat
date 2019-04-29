@@ -159,31 +159,29 @@ static int find_file(const char *path){
   return block_address;
 }
 
-/*
-// return the num_dir_ent at which the path's dir_ent is in dir_data and block_address 
-// (and populates dir_data with the directory entries of the directory containing path)
-struct file_info {
-  int block_address;
-  int num_dir_ent;
-};
-static struct file_info find_file_dir_ent(const char *path, struct dir_ent * dir_data){
+//static int update_size(const char *path, struct dir_ent * dir_data, int new_size){
+static int update_size(const char *path, int new_size){
+  struct dir_ent dir_data[BLOCK_SIZE];
   int block_address = superblock.s.root_address;
   char * path_piece = strtok((char *) path, "/");
-  
-  int num_dir_ent = -1;
+  int num_dir_ent;
   FILE *disk;
-  struct file_info result;
   
   if (strcmp(path, "/")==0){
     disk = fopen(cwd, "r+");
     pread_check(fileno(disk), dir_data, BLOCK_SIZE, block_address);
     fclose(disk);
-    result.block_address = block_address;
-    result.num_dir_ent = 0;
-    return result;
+    dir_data[0].size = new_size;
+    dir_data[1].size = new_size;
+    disk = fopen(cwd, "r+");
+    pwrite_check(fileno(disk), dir_data, BLOCK_SIZE, block_address);
+    fclose(disk);
+    return 0;
   }
 
+  int prev_address = block_address;
   while(path_piece != NULL){
+    printf("%s\n", path_piece);
     num_dir_ent = -1;
 
     disk = fopen(cwd, "r+");
@@ -193,24 +191,69 @@ static struct file_info find_file_dir_ent(const char *path, struct dir_ent * dir
     for(int i=0; i<BLOCK_SIZE/32; i++){
       if(dir_data[i].type != EMPTY_T && strcmp(path_piece, dir_data[i].file_name)==0){
 	num_dir_ent = i;
+	prev_address = block_address;
 	block_address = compute_address(dir_data[i].first_cluster);
 	break;
       }
     }
-    if(num_dir_ent==-1){return;}
+    if(num_dir_ent==-1){return -ENOENT;}
     path_piece = strtok(NULL, "/");
   }
 
   disk = fopen(cwd, "r+");
-  pread_check(fileno(disk), dir_data, BLOCK_SIZE, block_address);
+  pread_check(fileno(disk), dir_data, BLOCK_SIZE, prev_address);
   fclose(disk);
 
-  printf("pre: %d\n", block_address);
-  result.block_address = block_address;
-  result.num_dir_ent = num_dir_ent;
-  return result;  
+  //  printf("pre: %d\n", block_address);
+  dir_data[num_dir_ent].size = new_size;
+  disk = fopen(cwd, "r+");
+  pwrite_check(fileno(disk), dir_data, BLOCK_SIZE, prev_address);
+  fclose(disk);
+  return prev_address;
 }
-*/
+
+static int get_size(const char * path){
+  struct dir_ent dir_data[BLOCK_SIZE];
+  int block_address = superblock.s.root_address;
+  char * path_piece = strtok((char *) path, "/");
+  int num_dir_ent;
+  FILE *disk;
+  
+  if (strcmp(path, "/")==0){
+    disk = fopen(cwd, "r+");
+    pread_check(fileno(disk), dir_data, BLOCK_SIZE, block_address);
+    fclose(disk);
+    return dir_data[0].size;
+  }
+
+  int prev_address = block_address;
+  while(path_piece != NULL){
+    printf("%s\n", path_piece);
+    num_dir_ent = -1;
+
+    disk = fopen(cwd, "r+");
+    pread_check(fileno(disk), dir_data, BLOCK_SIZE, block_address);
+    fclose(disk);
+
+    for(int i=0; i<BLOCK_SIZE/32; i++){
+      if(dir_data[i].type != EMPTY_T && strcmp(path_piece, dir_data[i].file_name)==0){
+	num_dir_ent = i;
+	prev_address = block_address;
+	block_address = compute_address(dir_data[i].first_cluster);
+	break;
+      }
+    }
+    if(num_dir_ent==-1){return -ENOENT;}
+    path_piece = strtok(NULL, "/");
+  }
+
+  disk = fopen(cwd, "r+");
+  pread_check(fileno(disk), dir_data, BLOCK_SIZE, prev_address);
+  fclose(disk);
+
+  return dir_data[num_dir_ent].size;
+}
+
 
 /* 
  * FUSE functions
@@ -336,7 +379,7 @@ static int make_new(const char* path, int mode){
       }
       if(mode==FILE_T){
 	dir_data[i].type = FILE_T;
-	dir_data[i].size = BLOCK_SIZE; //???
+	dir_data[i].size = 0;
 	dir_data[i].first_cluster = new_block;
       }
 
@@ -529,7 +572,8 @@ static int fat_mknod(const char* path, mode_t mode, dev_t rdev){
 
 // makes a plain file
 static int fat_fcreate(const char* path, mode_t mode){
-  return make_new(path, FILE_T);
+  char * path_temp = strdup(path);
+  return make_new(path_temp, FILE_T);
 }
 
 // free temporarily allocated data structures
@@ -597,7 +641,8 @@ static int fat_read(const char* path, char* buf, size_t size, off_t offset, stru
 static int fat_write(const char* path, const char* buf, size_t size, off_t offset, struct fuse_file_info *fi){
   
   // block_address is the address at which data of path begins
-  int block_address = find_file(path);
+  char * path_temp = strdup(path);
+  int block_address = find_file(path_temp);
   if(block_address == -ENOENT){ return -ENOENT;}
 
   int start_write_block = compute_block(block_address);
@@ -669,6 +714,10 @@ static int fat_write(const char* path, const char* buf, size_t size, off_t offse
     
     amt_written += block_write_size;
   }
+  char * path_temp2 = strdup(path);
+  if(get_size(path_temp2) < amt_written){
+    update_size(strdup(path), amt_written);
+  }
   return amt_written;
 }
 
@@ -684,10 +733,14 @@ static int fat_truncate(const char* path, off_t size){
   if((block_address = compute_block(find_file(path2))) != -ENOENT){
      numBlocks_path += 1;
     //IS THIS THE CORRECT WAY OF GETTING NEXT BLOCK/ CHECK FOR END OF FILE
-    int next_block = FAT[block_address + BLOCK_SIZE];
-    while(next_block != 0){
+
+     //    int next_block = FAT[block_address + BLOCK_SIZE];
+     int next_block = FAT[compute_block(block_address)];
+
+     while(next_block != 0){
       numBlocks_path +=1;
-      next_block = FAT[block_address + BLOCK_SIZE];
+      //      next_block = FAT[block_address + BLOCK_SIZE];
+      next_block = FAT[next_block];
     }
     free(path2);
   }
@@ -750,7 +803,8 @@ static int fat_truncate(const char* path, off_t size){
 }
 
 static int fat_fgetattr(const char* path, struct stat* stbuf, struct fuse_file_info* fi){
-  return fat_getattr(path, stbuf);
+  char * temp_path = strdup(path);
+  return fat_getattr(temp_path, stbuf);
 }
 
 // iterate through free list and count++
