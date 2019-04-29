@@ -267,7 +267,7 @@ static void* fat_init(struct fuse_conn_info *conn) {
   // file exists  
   if (access(cwd, F_OK) != -1){
     disk = fopen(cwd, "r+");
-    pread_check(fileno(disk), &FAT, BLOCKS_TOTAL, 512);
+    pread_check(fileno(disk), &FAT, BLOCKS_TOTAL*4, 512);
     // read from offset 512 and read 4880 bytes in fat
     // read superblock
     pread_check(fileno(disk), &superblock, 512, 0);
@@ -660,6 +660,7 @@ static int fat_write(const char* path, const char* buf, size_t size, off_t offse
       
       freeListHead = freeListHead->next;
     }
+
     start_write_block = next_block;
     offset -= BLOCK_SIZE;
   }
@@ -689,7 +690,7 @@ static int fat_write(const char* path, const char* buf, size_t size, off_t offse
   int amt_written = block_write_size-offset;
 
   // now writing to blocks from their start
-  while(amt_written != size){ // since size could be larger than 1 block
+  while(amt_written < size){ // since size could be larger than 1 block
 
     // use FAT to find next block of file
     int next_block = FAT[compute_block(block_address)];
@@ -722,7 +723,7 @@ static int fat_write(const char* path, const char* buf, size_t size, off_t offse
 }
 
 // resize stuff
-static int fat_truncate(const char* path, off_t size){
+static int fat_truncate0(const char* path, off_t size){
   FILE *disk;
   char * path2 = strdup(path);
   // see how many blocks size takes (rounding up (size+(size%BLOCK_SIZE)/BLOCK_SIZE)
@@ -795,10 +796,80 @@ static int fat_truncate(const char* path, off_t size){
   }
   
   // write FAT to disk
+  
   disk = fopen(cwd, "r+");
   pwrite_check(fileno(disk), &dir_data, BLOCK_SIZE, block_address);
   fclose(disk);
   free(path3);
+  return 0;
+}
+
+static int fat_truncate(const char* path, off_t size){
+
+  FILE *disk;
+  disk = fopen(cwd, "r+");
+  pread_check(fileno(disk), &FAT, BLOCKS_TOTAL*4, 512);
+  fclose(disk);
+  
+  // check file size
+  char * path_temp = strdup(path);
+  int file_size = get_size(path_temp);
+  int file_block_size = (file_size+(BLOCK_SIZE - (file_size%BLOCK_SIZE)))/BLOCK_SIZE;
+  int final_block_size = (size+(BLOCK_SIZE - (size%BLOCK_SIZE)))/BLOCK_SIZE;
+
+  // increasing file size
+  if(size > file_size){
+
+    char * path_temp1 = strdup(path);
+    int last_block = compute_block(find_file(path_temp1)); // this is first block of the file
+
+    // finds the last block of file
+    while(FAT[last_block] != 0){
+      last_block = FAT[last_block];
+      file_size-=BLOCK_SIZE;
+    }
+
+    // adds blocks from free list and updates FAT
+    for(int i=0; i< final_block_size-file_block_size; i++){
+      if(freeListHead==NULL){ return -ENOMEM;}
+      // gets new block
+      int new_block = freeListHead-> value;
+      freeListHead = freeListHead->next;
+      // updates FAT entry
+      FAT[last_block] = new_block;
+      last_block = new_block;
+    }
+  }
+
+  // decreasing file size
+  else{
+    while(size < file_size){
+
+      int last_block = compute_block(find_file(strdup(path)));
+      for(int i=0; i<final_block_size-1; i++){
+	last_block = FAT[last_block];    
+      }
+      
+      int new_last_block = last_block;
+
+      while(final_block_size < file_block_size){
+	freeListTail->next = FAT[last_block];
+	freeListTail = freeListTail -> next;
+	
+	final_block_size++;
+      }
+      FAT[new_last_block] = 0;
+    }
+  }
+
+  // updates dir_ent size for our path
+  update_size(strdup(path), size);
+
+  // write FAT to disk
+  disk = fopen(cwd, "r+");
+  pread_check(fileno(disk), &FAT, BLOCKS_TOTAL*4, 512);
+  fclose(disk);
+  
   return 0;
 }
 
