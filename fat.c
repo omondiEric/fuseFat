@@ -212,13 +212,16 @@ static int update_size(const char *path, int new_size){
   return prev_address;
 }
 
+// helper to retrieve size 
 static int get_size(const char * path){
   struct dir_ent dir_data[BLOCK_SIZE];
   int block_address = superblock.s.root_address;
   char * path_piece = strtok((char *) path, "/");
   int num_dir_ent;
   FILE *disk;
-  
+	
+	
+  // root case
   if (strcmp(path, "/")==0){
     disk = fopen(cwd, "r+");
     pread_check(fileno(disk), dir_data, BLOCK_SIZE, block_address);
@@ -235,6 +238,7 @@ static int get_size(const char * path){
     pread_check(fileno(disk), dir_data, BLOCK_SIZE, block_address);
     fclose(disk);
 
+// iterate through directory entries updating the block address
     for(int i=0; i<BLOCK_SIZE/32; i++){
       if(dir_data[i].type != EMPTY_T && strcmp(path_piece, dir_data[i].file_name)==0){
 	num_dir_ent = i;
@@ -313,6 +317,7 @@ static void* fat_init(struct fuse_conn_info *conn) {
   return NULL;
 }
 
+// helper to make a new file or directory
 static int make_new(const char* path, int mode){
   
   if(freeListHead==NULL){
@@ -557,7 +562,7 @@ static int fat_rmdir(const char* path){
 static int fat_open(const char* path, struct fuse_file_info* fi){
   int addr = find_file(path);
   if(addr==-ENOENT){
-    return -ENOENT;
+    return -ENOENT; // cannot open if path is invalid
   }
   return 0;
 }
@@ -733,7 +738,6 @@ static int fat_truncate0(const char* path, off_t size){
   // follow FAT, counting how many blocks are in the file
   if((block_address = compute_block(find_file(path2))) != -ENOENT){
      numBlocks_path += 1;
-    //IS THIS THE CORRECT WAY OF GETTING NEXT BLOCK/ CHECK FOR END OF FILE
 
      //    int next_block = FAT[block_address + BLOCK_SIZE];
      int next_block = FAT[compute_block(block_address)];
@@ -786,7 +790,7 @@ static int fat_truncate0(const char* path, off_t size){
       if(dir_data[i].type != EMPTY_T && strcmp(path_piece, dir_data[i].file_name)==0){
 	exists = true;
 	block_address = compute_address(dir_data[i].first_cluster);
-	//update size of dir data ??????????????????????????????????????????????????????
+	// update size of dir data 
 	dir_data[i].size -= BLOCK_SIZE;
 	break;
       }
@@ -847,11 +851,12 @@ static int fat_truncate(const char* path, off_t size){
 
       int last_block = compute_block(find_file(strdup(path)));
       for(int i=0; i<final_block_size-1; i++){
-	last_block = FAT[last_block];    
+	last_block = FAT[last_block];    // update fat
       }
       
       int new_last_block = last_block;
 
+  // update free list
       while(final_block_size < file_block_size){
 	freeListTail->next = FAT[last_block];
 	freeListTail = freeListTail -> next;
