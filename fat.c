@@ -771,7 +771,7 @@ static int fat_truncate(const char* path, off_t size){
 
       int last_block = compute_block(find_file(strdup(path)));
       for(int i=0; i<final_block_size-1; i++){
-	last_block = FAT[last_block];    // update fat
+	last_block = FAT[last_block];    // update last block
       }
       
       int new_last_block = last_block;
