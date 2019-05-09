@@ -644,7 +644,7 @@ static int fat_read(const char* path, char* buf, size_t size, off_t offset, stru
 
 //write size bytes to buff
 static int fat_write(const char* path, const char* buf, size_t size, off_t offset, struct fuse_file_info *fi){
-  
+	off_t offset_param = offset;
   // block_address is the address at which data of path begins
   char * path_temp = strdup(path);
   int block_address = find_file(path_temp);
@@ -692,7 +692,8 @@ static int fat_write(const char* path, const char* buf, size_t size, off_t offse
   pwrite_check(fileno(disk), &data_block, BLOCK_SIZE, block_address);
   fclose(disk);
   
-  int amt_written = block_write_size-offset;
+  //$ int amt_written = block_write_size-offset;
+  int amt_written = block_write_size;
 
   // now writing to blocks from their start
   while(amt_written < size){ // since size could be larger than 1 block
@@ -708,8 +709,9 @@ static int fat_write(const char* path, const char* buf, size_t size, off_t offse
     fclose(disk);
 
     // calculate amount of the buf to put in data
-    block_write_size = size - amt_written;
-    if(block_write_size >= BLOCK_SIZE){ block_write_size = BLOCK_SIZE;}
+    //$ block_write_size = size - amt_written;
+    block_write_size = size > BLOCK_SIZE ? BLOCK_SIZE : size;
+    //$ if(block_write_size >= BLOCK_SIZE){ block_write_size = BLOCK_SIZE;}
     // put the buf into data
     memcpy(data_block, buf+amt_written, block_write_size);
 
@@ -721,8 +723,8 @@ static int fat_write(const char* path, const char* buf, size_t size, off_t offse
     amt_written += block_write_size;
   }
   char * path_temp2 = strdup(path);
-  if(get_size(path_temp2) < amt_written){
-    update_size(strdup(path), amt_written);
+  if(get_size(path_temp2) < (offset_param+amt_written)){
+	  update_size(strdup(path), (offset_param + amt_written));
   }
   return amt_written;
 }
@@ -767,7 +769,7 @@ static int fat_truncate(const char* path, off_t size){
 
   // decreasing file size
   else{
-    while(size < file_size){
+	  //while(size < file_size){
 
       int last_block = compute_block(find_file(strdup(path)));
       for(int i=0; i<final_block_size-1; i++){
@@ -784,7 +786,7 @@ static int fat_truncate(const char* path, off_t size){
 	final_block_size++;
       }
       FAT[new_last_block] = 0;
-    }
+      //}
   }
 
   // updates dir_ent size for our path
